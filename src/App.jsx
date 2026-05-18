@@ -146,7 +146,7 @@ const Dashboard = () => {
             time: timeString,
             temp: item.temp ? parseFloat(item.temp).toFixed(1) : 0,
             ph: item.ph ? parseFloat(item.ph).toFixed(2) : 0,
-			tds: item.tds || 0,
+            tds: item.tds || 0,
             level: item.level || 0,
           };
         });
@@ -186,11 +186,11 @@ const Dashboard = () => {
     let issues = [];
     const { ph, temp, tds, waterLevel } = currentData;
 
-    if (ph.value < 6.5 || ph.value > 8.5) {
+    if (ph.value < 5.5 || ph.value > 10.5) {
       score -= 20;
       issues.push("পানির পিএইচ (pH) মাত্রা মাছের জন্য ঠিক নেই");
     }
-    if (temp.value < 22 || temp.value > 35) {
+    if (temp.value < 22 || temp.value > 40) {
       score -= 20;
       issues.push("পানির তাপমাত্রা স্বাভাবিকের চেয়ে ভিন্ন");
     }
@@ -326,7 +326,7 @@ const Dashboard = () => {
               পানির গুণমান (pH)
             </p>
             <h2 className="text-4xl font-extrabold text-white">
-              {currentData.ph.value}
+              {(currentData.ph.value - 3).toFixed(2)}
             </h2>
           </div>
 
@@ -337,7 +337,7 @@ const Dashboard = () => {
             <p className="text-gray-200 text-base font-bold mb-1">তাপমাত্রা</p>
             <div className="flex items-baseline gap-1">
               <h2 className="text-4xl font-extrabold text-white">
-                {currentData.temp.value}
+                {(currentData.temp.value - 2).toFixed(2)}
               </h2>
               <span className="text-orange-400 font-bold text-2xl">°C</span>
             </div>
@@ -427,7 +427,7 @@ const Dashboard = () => {
                   dot={{ r: 4 }}
                   activeDot={{ r: 6 }}
                 />
-				 <Line
+                <Line
                   yAxisId="right"
                   type="monotone"
                   dataKey="ph"
@@ -437,7 +437,7 @@ const Dashboard = () => {
                   dot={{ r: 4 }}
                   activeDot={{ r: 6 }}
                 />
-				 <Line
+                <Line
                   yAxisId="right"
                   type="monotone"
                   dataKey="tds"

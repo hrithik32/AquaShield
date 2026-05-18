@@ -42,8 +42,8 @@ const SENSORS = [
     icon: FlaskConical,
     color: "purple",
     normal: { min: 4, max: 10, step: 0.1, val: 7.2 },
-    danger: { min: 3, max: 6.4, step: 0.1, val: 5.1 },
-    recover: { min: 5, max: 9, step: 0.1, val: 7.0 },
+    danger: { min: 3, max: 12, step: 0.1, val: 5.1 },
+    recover: { min: 5, max: 10, step: 0.1, val: 7.0 },
   },
   {
     key: "tds",
@@ -59,22 +59,12 @@ const SENSORS = [
   },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DANGER THRESHOLDS
-// ─────────────────────────────────────────────────────────────────────────────
-const THRESHOLDS = {
-  temp: { label: "> 32°C", breach: (v) => v > 32 },
-  ph: { label: "< 6.0 or >9.0", breach: (v) => v < 6.0 || v > 9.0 },
-  tds: { label: "> 600 ppm", breach: (v) => v > 600 },
-};
-
 const JIT = { temp: [1.0, 2.0], ph: [0.5, 0.5], tds: [5, 5] };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WATER LEVEL CALCULATION
 // Distance ≥ 30 cm → 0%  (tank empty)
 // Distance ≤ 16 cm → 100% (tank full)
-// Linear scale between 16–30 cm
 // ─────────────────────────────────────────────────────────────────────────────
 const TANK_EMPTY_CM = 30;
 const TANK_FULL_CM = 16;
@@ -106,26 +96,6 @@ function applyJitter(src) {
     out[s.key] = s.int ? Math.round(raw) : +raw.toFixed(s.dec);
   });
   return out;
-}
-
-function anyThresholdBreached(vals) {
-  return SENSORS.some((s) => THRESHOLDS[s.key]?.breach(vals[s.key]));
-}
-
-function whichThresholdBreached(vals) {
-  return SENSORS.filter((s) => THRESHOLDS[s.key]?.breach(vals[s.key])).map(
-    (s) => `${s.label} (${THRESHOLDS[s.key].label})`,
-  );
-}
-
-function buildDefaultProfiles() {
-  const p = { normal: {}, danger: {}, recover: {} };
-  SENSORS.forEach((s) => {
-    p.normal[s.key] = s.normal.val;
-    p.danger[s.key] = s.danger.val;
-    p.recover[s.key] = s.recover.val;
-  });
-  return p;
 }
 
 function nowTime() {
@@ -198,9 +168,17 @@ export default function AdminPanel() {
   const [systemOn, setSystemOn] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [phase, setPhase] = useState("idle");
-  const [profiles, setProfiles] = useState(buildDefaultProfiles);
+  const [profiles, setProfiles] = useState(() => {
+    const p = { normal: {}, danger: {}, recover: {} };
+    SENSORS.forEach((s) => {
+      p.normal[s.key] = s.normal.val;
+      p.danger[s.key] = s.danger.val;
+      p.recover[s.key] = s.recover.val;
+    });
+    return p;
+  });
   const [liveVals, setLiveVals] = useState(null);
-  const [realWaterLevel, setRealWaterLevel] = useState(null); // { pct, cm }
+  const [realWaterLevel, setRealWaterLevel] = useState(null);
   const [pump1, setPump1] = useState(false);
   const [pump2, setPump2] = useState(false);
   const [autoMode, setAutoMode] = useState(false);
@@ -250,7 +228,6 @@ export default function AdminPanel() {
       setPump1(!!v.pump1);
       setPump2(!!v.pump2);
     });
-    // Water level — ALWAYS from /sensor, uses new 16–30 cm scale
     const unsub3 = onValue(ref(db, "/sensor"), (snap) => {
       const v = snap.val();
       if (v && v.waterLevel !== undefined) {
@@ -279,7 +256,6 @@ export default function AdminPanel() {
       temp: +v.temp.toFixed(2),
       ph: +v.ph.toFixed(3),
       tds: +v.tds.toFixed(1),
-      // waterLevel deliberately NOT written
     });
   }, []);
 
@@ -297,13 +273,10 @@ export default function AdminPanel() {
   );
 
   // ── Safe pump write — tank safety guards ────────────────────────────────
-  // Pump 1 (water IN)  → blocked at 100% full  (prevents overflow)
-  // Pump 2 (water OUT) → blocked at 0% empty   (prevents dry-run)
   const safePumpWrite = useCallback(
     async (p1Requested, p2Requested) => {
       const wl = realWaterLevelRef.current;
       const wlPct = wl ? wl.pct : null;
-
       let p1Final = p1Requested;
       let p2Final = p2Requested;
 
@@ -345,7 +318,7 @@ export default function AdminPanel() {
     }, 2000);
   }, [stopJitter, writeFake]);
 
-  // ── Animation helpers ───────────────────────────────────────────────────
+  // ── Animation stop ──────────────────────────────────────────────────────
   const stopAnim = useCallback(() => {
     if (animTimer.current) {
       clearInterval(animTimer.current);
@@ -353,57 +326,15 @@ export default function AdminPanel() {
     }
   }, []);
 
-  const animateSimple = useCallback(
-    (from, to, durationMs, progKey) => {
-      return new Promise((resolve) => {
-        const steps = Math.max(Math.floor(durationMs / 2000), 1);
-        const iv = durationMs / steps;
-        let step = 0;
-
-        animTimer.current = setInterval(() => {
-          step++;
-          const e = easeInOut(step / steps);
-          const smooth = {};
-          SENSORS.forEach((s) => {
-            smooth[s.key] = from[s.key] + (to[s.key] - from[s.key]) * e;
-          });
-
-          const j = applyJitter(smooth);
-          writeFake(j);
-          setLiveVals({ ...j });
-          SENSORS.forEach((s) => {
-            anchorRef.current[s.key] = smooth[s.key];
-          });
-          setProgress((p) => ({
-            ...p,
-            [progKey]: Math.round((step / steps) * 100),
-          }));
-
-          if (step >= steps) {
-            clearInterval(animTimer.current);
-            animTimer.current = null;
-            SENSORS.forEach((s) => {
-              anchorRef.current[s.key] = to[s.key];
-            });
-            setProgress((p) => ({ ...p, [progKey]: 0 }));
-            resolve({ snapshot: { ...to } });
-          }
-        }, iv);
-      });
-    },
-    [writeFake],
-  );
-
+  // ── animateDanger — runs full 15 s to danger target, NO early exit ──────
   const animateDanger = useCallback(
     (from, to, durationMs) => {
       return new Promise((resolve) => {
         const steps = Math.max(Math.floor(durationMs / 2000), 1);
         const iv = durationMs / steps;
         let step = 0;
-        let done = false;
 
         animTimer.current = setInterval(() => {
-          if (done) return;
           step++;
           const e = easeInOut(step / steps);
           const smooth = {};
@@ -422,34 +353,58 @@ export default function AdminPanel() {
             danger: Math.round((step / steps) * 100),
           }));
 
-          if (anyThresholdBreached(smooth)) {
-            done = true;
-            clearInterval(animTimer.current);
-            animTimer.current = null;
-            const snapshot = { ...smooth };
-            SENSORS.forEach((s) => {
-              anchorRef.current[s.key] = snapshot[s.key];
-            });
-            setProgress((p) => ({ ...p, danger: 0 }));
-            const breached = whichThresholdBreached(smooth);
-            log(
-              `⚠ Threshold crossed: ${breached.join(", ")} — pumps activating early.`,
-              "err",
-            );
-            resolve({ snapshot, reachedEnd: false });
-            return;
-          }
-
           if (step >= steps) {
-            done = true;
             clearInterval(animTimer.current);
             animTimer.current = null;
             SENSORS.forEach((s) => {
               anchorRef.current[s.key] = to[s.key];
             });
             setProgress((p) => ({ ...p, danger: 0 }));
-            log("Danger target reached. Pumps activating.", "err");
-            resolve({ snapshot: { ...to }, reachedEnd: true });
+            log("Danger target reached. Activating pumps now.", "err");
+            resolve({ snapshot: { ...to } });
+          }
+        }, iv);
+      });
+    },
+    [writeFake, log],
+  );
+
+  // ── animateRecover — runs full duration to recover target ───────────────
+  const animateRecover = useCallback(
+    (from, to, durationMs) => {
+      return new Promise((resolve) => {
+        const steps = Math.max(Math.floor(durationMs / 2000), 1);
+        const iv = durationMs / steps;
+        let step = 0;
+
+        animTimer.current = setInterval(() => {
+          step++;
+          const e = easeInOut(step / steps);
+          const smooth = {};
+          SENSORS.forEach((s) => {
+            smooth[s.key] = from[s.key] + (to[s.key] - from[s.key]) * e;
+          });
+
+          const j = applyJitter(smooth);
+          writeFake(j);
+          setLiveVals({ ...j });
+          SENSORS.forEach((s) => {
+            anchorRef.current[s.key] = smooth[s.key];
+          });
+          setProgress((p) => ({
+            ...p,
+            recover: Math.round((step / steps) * 100),
+          }));
+
+          if (step >= steps) {
+            clearInterval(animTimer.current);
+            animTimer.current = null;
+            SENSORS.forEach((s) => {
+              anchorRef.current[s.key] = to[s.key];
+            });
+            setProgress((p) => ({ ...p, recover: 0 }));
+            log("Recovery target reached. Pumps stopping.", "ok");
+            resolve();
           }
         }, iv);
       });
@@ -508,7 +463,7 @@ export default function AdminPanel() {
     log("Normal profile applied — jitter running around normal anchors.", "ok");
   }, [systemOn, animating, writeFake, log]);
 
-  // ── START DANGER → auto RECOVER ─────────────────────────────────────────
+  // ── START DANGER → PUMPS ON → RECOVER → PUMPS OFF ───────────────────────
   const runDanger = useCallback(async () => {
     if (!systemOn || animating) return;
 
@@ -528,15 +483,12 @@ export default function AdminPanel() {
     const dangerVals = { ...cur.danger };
     const recoverVals = { ...cur.recover };
 
-    log(
-      "Danger sequence — rising over 30 sec toward danger targets...",
-      "warn",
-    );
-    log("Thresholds: Temp>32°C | pH<6.0 or >9.0 | TDS>600ppm", "info");
+    log("Danger sequence — rising over 15 sec to danger targets...", "warn");
 
-    const { snapshot } = await animateDanger(fromVals, dangerVals, 30000);
+    // Step 1: animate from normal → danger over 15 seconds (always full duration)
+    const { snapshot } = await animateDanger(fromVals, dangerVals, 15000);
 
-    // safePumpWrite checks tank level before turning pumps ON
+    // Step 2: pumps ON now that danger target is fully reached
     if (!autoModeRef.current) {
       await safePumpWrite(true, true);
     } else {
@@ -546,14 +498,15 @@ export default function AdminPanel() {
       );
     }
 
+    // Step 3: animate from danger → recover (pumps stay ON during this)
     setPhase("recovering");
     log(
-      "Auto-recovery started — values falling to recover targets over 45 sec...",
+      "Recovery started — values falling to recover targets over 45 sec...",
       "warn",
     );
-    await animateSimple(snapshot, recoverVals, 45000, "recover");
+    await animateRecover(snapshot, recoverVals, 45000);
 
-    // Turning OFF is always safe — no guard needed
+    // Step 4: pumps OFF once recover target is reached
     if (!autoModeRef.current) {
       await writePumps(false, false);
     }
@@ -568,7 +521,7 @@ export default function AdminPanel() {
     stopJitter,
     startJitter,
     animateDanger,
-    animateSimple,
+    animateRecover,
     safePumpWrite,
     writePumps,
     log,
@@ -597,12 +550,15 @@ export default function AdminPanel() {
   const thresholdPct = (sensor) => {
     const cfg = sensor.danger;
     if (sensor.key === "temp")
-      return Math.round(((32 - cfg.min) / (cfg.max - cfg.min)) * 100);
+      return [Math.round(((32 - cfg.min) / (cfg.max - cfg.min)) * 100)];
     if (sensor.key === "tds")
-      return Math.round(((600 - cfg.min) / (cfg.max - cfg.min)) * 100);
+      return [Math.round(((600 - cfg.min) / (cfg.max - cfg.min)) * 100)];
     if (sensor.key === "ph")
-      return Math.round(((6.0 - cfg.min) / (cfg.max - cfg.min)) * 100);
-    return null;
+      return [
+        Math.round(((6 - cfg.min) / (cfg.max - cfg.min)) * 100),
+        Math.round(((9 - cfg.min) / (cfg.max - cfg.min)) * 100),
+      ];
+    return [];
   };
 
   // ── Water level color ───────────────────────────────────────────────────
@@ -780,6 +736,8 @@ export default function AdminPanel() {
               stopAnim();
               stopJitter();
               setAnimating(false);
+              setProgress({ danger: 0, recover: 0 });
+              log("Animation manually stopped.", "warn");
             }}
             disabled={!animating}
             className="rounded-xl py-4 font-bold border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
@@ -949,17 +907,19 @@ export default function AdminPanel() {
                           className="w-full accent-current"
                           style={{ accentColor: c.thumb }}
                         />
-                        {profile === "danger" && pct !== null && (
-                          <div
-                            className="absolute top-0 h-full flex items-center pointer-events-none"
-                            style={{ left: `${pct}%` }}
-                          >
+                        {profile === "danger" &&
+                          pct.map((p, idx) => (
                             <div
-                              className="w-0.5 h-4 bg-red-400 opacity-80 rounded"
-                              title="Danger threshold"
-                            />
-                          </div>
-                        )}
+                              key={idx}
+                              className="absolute top-0 h-full flex items-center pointer-events-none"
+                              style={{ left: `${p}%` }}
+                            >
+                              <div
+                                className="w-0.5 h-4 bg-red-400 opacity-80 rounded"
+                                title="Danger threshold"
+                              />
+                            </div>
+                          ))}
                       </div>
                       <div className="flex justify-between text-xs text-slate-600 mt-0.5">
                         <span>{cfg.min}</span>
