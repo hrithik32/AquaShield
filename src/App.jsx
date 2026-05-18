@@ -368,7 +368,7 @@ const Dashboard = () => {
         <div className="bg-black/60 backdrop-blur-lg rounded-2xl p-5 lg:p-7 shadow-2xl border border-white/20 mb-6">
           <h3 className="text-2xl font-bold text-white mb-6 border-b border-white/20 pb-3 flex items-center gap-3">
             <ChartIcon size={28} className="text-purple-400" />
-            সেন্সরের হিস্ট্রি গ্রাফ (তাপমাত্রা ও pH)
+            সেন্সরের হিস্ট্রি গ্রাফ (তাপমাত্রা ও pH/TDS)
           </h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
